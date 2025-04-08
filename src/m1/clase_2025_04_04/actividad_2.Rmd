@@ -1,0 +1,715 @@
+---
+title: "**Actividad 2**"
+author: "**Equipo 3**"
+date: "**2025-04-04**"
+output:
+  html_document:
+    df_print: paged
+    toc: TRUE
+    toc_float: TRUE
+    toc_collapsed: TRUE
+    number_sections: TRUE
+    theme_united: united
+    highlight: tango
+    code_download: TRUE
+  pdf_document:
+    latex_engine: xelatex
+always_allow_html: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Datos Espaciales
+
+## Análisis de Datos Espaciales
+
+### Análisis Exploratorio de Datos Espaciales
+
+El análisis se centra en estudiar los patrones espaciales y las relaciones entre dos variables económicas clave:
+- Actividad Empresarial (business_activity)
+- Salario Real (real_wage)
+- Inversión Extranjera Directa en logaritmo (log_new_fdi_real_mxn)
+
+Se analizará cómo estas variables se distribuyen espacialmente a través de los estados de México, sus patrones de clustering espacial y cómo se relacionan entre sí considerando su ubicación geográfica.
+
+Como suele ser lo primero debe ser cargar las librerías a utilizar:
+
+```{r}
+library(foreign) # Importar archivos externos
+library(dplyr) # Manipulación de datos
+library(spdep) # Colección de funciones para crear matriz de pesos espaciales
+library(tigris) # Permite trabajar con shapefiles
+library(rgeoda) # Análisis de datos espaciales basado en GeoDa
+library(RColorBrewer) # Ofrece varias paletas de colores
+library(viridis) # Ofrece varias paletas de colores
+library(ggplot2) # Para crear gráficos a partir del conjunto de datos
+library(tmap) # Creación de mapas para visualizar distribuciones de datos espaciales
+library(sf) # Funciones para codificar datos vectoriales espaciales
+library(sp) # Clases y métodos para datos espaciales
+library(spgwr) # Regresión ponderada geográficamente
+library(GWmodel) # Requerido para la creación adaptativa del kernel para aplicar GWR
+```
+
+Seguidamente se procede a importar las bases de datos requeridas:
+
+Primero leemos las bases de datos tradicionales (tablas de valores numéricos) a los diferentes niveles geográficos (espaciales) involucrados en nuestro análisis. 
+
+A nivel estatal
+
+```{r}
+mx_state <- read.csv("state_data.csv")
+head(mx_state)
+glimpse(mx_state)
+```
+
+
+A nivel municipal
+```{r}
+mx_mpio  <- read.csv("mpio_data.csv")
+head(mx_mpio)
+glimpse(mx_mpio)
+```
+
+Seguidamente, se leen los archivos de las formas geométricas (geocercas) que determinarán los mapas a realizar después para visualizar los datos.
+
+NOTA: Indispensable que en la misma carpeta que contiene el código se ubiquen los archivos con extensiones: .cpg, .dbf, .prj, .sbn, .sbx, .shx y .shp. Aunque, aparentemente el código sólo lee el archivo .shp, este tiene referencia a todos los demás, por lo que si alguno falta seguramente la ejecución del código marcará un error. 
+
+Igual que antes, esto viene a diferentes niveles de granularidad:
+
+A nivel estado (32)
+```{r}
+mx_state_map <- st_read("mexlatlong.shp")
+# mx_state_map <- read_sf("mexlatlong.shp")
+```
+
+A nivel municipio (2,456)
+```{r}
+mx_mpio_map <- st_read("Mexican Municipalities.shp")
+# mx_mpio_map <- read_sf("Mexican Municipalities.shp")
+```
+
+Ahora que tenemos ambas bases de datos en el ambiente de trabajo de R, es necesario unificarlas mediante algún campo clave (OBJECTID para las geocercas y state_id para la base de datos tradicional en este caso).
+
+```{r}
+state_geodata <- geo_join(mx_state_map,mx_state,'OBJECTID','state_id',how='inner')
+mpio_geodata  <- geo_join(mx_mpio_map,mx_mpio,'IDUNICO','clave_municipio',how='inner')
+```
+
+
+### Análisis Exploratorio de Datos (EDA: Exploratory Data Analysis) 
+
+El Análisis exploratorio de datos es útil para detectar errores obvios o bien identificar datos atípicos o faltantes dentro de nuestra base de datos. A su vez, ayuda a obtener un mejor entendimiento de los posibles patrones dentro de la base de datos y relaciones relevantes o significativas entre las diferentes variables involucradas.
+
+En este caso, nos enfocaremos en entender cómo la Actividad Empresarial, el Salario Real y la Inversión Extranjera Directa (Log) varían a través del espacio geográfico de México, identificando posibles clusters o patrones espaciales que puedan ser de interés.
+
+### Análisis Exploratorio de Datos Espaciales (ESDA: Exploratory Spatial Data Analysis)
+
+El Análisis exploratorio de datos espacial involucra diferentes herramientas para visualizar los patrones espaciales existentes en la base de datos. Estos datos se pueden segregar o descomponer los patrones espaciales en diferentes elementos a lo largo del mapa, y a su vez medir la extensión de estas autocorrelaciones espaciales.
+
+La creación de mapas siempre parte de las geocercas importadas en R mediante los archivos .shp
+
+```{r}
+### Basic Map Making 
+# plot(state_geodata)
+# plot(mpio_geodata) do not run 
+```
+
+Ahora unos simples ejemplos utilizando la librería 'tmap'
+
+Visualización a nivel estado
+```{r}
+tm_shape(mx_state_map) +
+  tm_polygons(col = "black") +
+  tm_compass(position=c("left","bottom")) +
+  tm_title("Estados de México") +
+  tm_text("ADMIN_NAME", size = "AREA")
+```
+
+Visualización a nivel municipio (puede tardar unos minutos en ejecutarse)
+```{r}
+tm_shape(mx_mpio_map) +
+  tm_polygons(col = "black") +
+  tm_compass(position=c("left","bottom")) +
+  tm_title("Municipios de México")
+```
+
+Por si acaso, puede ser recomendable actualizar la librería 'tmap' de acuerdo a los contenidos en GitHub, esto se puede realizar utilizando los siguientes comandos
+```{r}
+## library(tmap) # Breaking News: tmap 3.x is retiring
+# remotes::install_github('r-tmap/tmap')
+```
+
+Ya con la última versión pueden ejecutar el siguiente comando que abre una breve página desarrollada con la paquetería de 'Shiny' para visualizar diferentes opciones disponibles para las paletas de colores
+```{r}
+# tmaptools::palette_explorer()
+```
+
+
+Ahora sí, mezclaremos la data de las geocercas con alguna de las variables que vienen en la tabla de datos inicial para su visualización en los mapas:
+
+Municipios de México y su falta de acceso a los Servicios de Salud
+```{r}
+tm_shape(mpio_geodata) + 
+  tm_polygons(col = "popnoafmed2015", palette="-cividis", style="quantile", n=8, title="Pop Percentage") +
+  tm_title_out('Población sin Acceso a Servicios de Salud', position=c('right', 'top'), size=1) +
+  tm_legend(position= c("left", "bottom"))
+```
+
+Distribución del Salario Real por Estado
+```{r, message=FALSE}
+tm_shape(state_geodata) +
+  tm_polygons(col = "real_wage", palette="BuGn", style="quantile", n=8, title="Salario Real") +
+  tm_layout(main.title= 'Salario Real',  title.position = c('right', 'top'), legend.outside = TRUE, legend.outside.position = "left", title.size = 1)
+```
+
+Distribución de la Actividad Empresarial por Estado
+```{r, message=FALSE}
+tm_shape(state_geodata) +
+  tm_polygons(col = "business_activity", palette="Blues", style="quantile", n=8, title="Actividad Empresarial") +
+  tm_layout(main.title= 'Actividad Empresarial',  title.position = c('right', 'top'), legend.outside = TRUE, legend.outside.position = "left", title.size = 1)
+```
+
+```{r, message=FALSE}
+tm_shape(state_geodata) +
+  tm_polygons(col = "log_new_fdi_real_mxn", palette="Greens", style="quantile", n=8, title="Inversión Extranjera Directa (log)") +
+  tm_layout(main.title= 'Inversión Extranjera Directa (Log)',  title.position = c('right', 'top'), legend.outside = TRUE, legend.outside.position = "left", title.size = 1)
+```
+
+### Matriz de Conectividad Espacial
+
+La matriz de conectividad espacial nos ayudará a entender las relaciones espaciales entre los estados y cómo la Actividad Empresarial, el Salario Real y la Inversión Extranjera Directa pueden estar relacionados espacialmente.
+
+```{r}
+swm  <- poly2nb(mx_state_map, queen=T)
+
+summary(swm) # The average number of neighbors is 4.31
+```
+
+Visualización Gráfica de la matriz de conectividad (Vecindades estilo 'Reina')
+```{r}
+sswm <- nb2listw(swm, style="W", zero.policy = TRUE)
+
+mx_state_map_a <- as(mx_state_map, "Spatial")
+mx_state_map_centroid <- coordinates(mx_state_map_a) 
+plot(mx_state_map_a,border="blue",axes=FALSE,las=1, main="Mexico's States Queen SWM")
+plot(mx_state_map_a,col="grey",border=grey(0.9),axes=T,add=T) 
+plot(sswm,coords=mx_state_map_centroid,pch=19,cex=0.1,col="red",add=T) 
+```
+
+
+### Análisis de Autocorrelación Espacial
+
+#### Índice Global de Moran
+```{r}
+moran_business <- moran.test(state_geodata$business_activity, sswm)           # Global Moran's I test para la Actividad Empresarial
+moran_wage <- moran.test(state_geodata$real_wage, sswm)                  # Global Moran's I test para el Salario Real
+moran_fdi <- moran.test(state_geodata$log_new_fdi_real_mxn, sswm)      # Global Moran's I test para la IED
+```
+
+Presentación de resultados en formato tabla
+
+```{r}
+# Extraer los valores del índice de Moran y los p-values
+moran_values <- c(moran_business$estimate[1], moran_wage$estimate[1], moran_fdi$estimate[1])
+p_values <- c(moran_business$p.value, moran_wage$p.value, moran_fdi$p.value)
+
+# Generar indicadores de significancia
+significance <- sapply(p_values, function(p) {
+  if (p < 0.001) return("***")
+  else if (p < 0.01) return("**")
+  else if (p < 0.05) return("*")
+  else return("NS")
+})
+
+# Crear la tabla de resultados
+tabla_moran <- data.frame(
+  Variable = c("Actividad Empresarial", "Salario Real", "Inversión Extranjera Directa (Log)"), 
+  Índice_Moran = round(moran_values, 4),
+  Valor_p = round(p_values, 4),
+  Significancia = significance
+)
+
+tabla_moran
+```
+
+- Actividad Empresarial:
+  - Estadístico de Moran: 0.184 (p-valor: 0.004)
+  - Autocorrelación espacial positiva significativa
+  - Estados con niveles similares de actividad empresarial tienden a agruparse espacialmente
+
+- Salario Real:
+  - Estadístico de Moran: 0.072 (p-valor: 0.193)
+  - No hay patrón espacial significativo
+  - Distribución espacial aparentemente aleatoria
+
+- Inversión Extranjera Directa (en log):
+  - Estadístico de Moran: -0.018 (p-valor: 0.440)
+  - Sin autocorrelación espacial significativa
+  - Distribución espacial aleatoria
+
+### Identificación de Clusters
+
+Cálculo de lags de acuerdo con la matriz de conectividad antes creada
+```{r}
+state_geodata$sp_lag_business_activity <- lag.listw(sswm, state_geodata$business_activity, zero.policy=TRUE) 
+state_geodata$sp_lag_real_wage <- lag.listw(sswm, state_geodata$real_wage, zero.policy=TRUE)
+state_geodata$sp_lag_fdi <- lag.listw(sswm, state_geodata$log_new_fdi_real_mxn, zero.policy=TRUE)
+```
+
+Mapas de lag para las variables de interés
+
+Los estados del norte y noroeste (colores azul oscuro) presentan mayor actividad empresarial, mientras el sur y sureste (tonos claros) tienen actividad más baja.
+
+```{r}
+tm_shape(state_geodata) + 
+  tm_polygons(col = "sp_lag_business_activity", palette="Blues", style="quantile", n=8, title="Actividad Empresarial") +
+  tm_layout(main.title= 'Clusters de Actividad Empresarial',  title.position = c('right', 'top'), legend.outside = TRUE, legend.outside.position = "left", title.size = 1)
+```
+
+Los salarios más altos (rojo oscuro) se concentran en áreas específicas como Baja California Sur, regiones del noreste, y partes del sureste como Quintana Roo. Las regiones centrales y centro-occidente tienen salarios medios-bajos.
+
+```{r}
+tm_shape(state_geodata) + 
+  tm_polygons(col = "sp_lag_real_wage", palette="OrRd", style="quantile", n=8, title="Salario Real") +
+  tm_layout(main.title= 'Clusters de Salario Real',  title.position = c('right', 'top'), legend.outside = TRUE, legend.outside.position = "left", title.size = 1)
+```
+
+La Inversión Extranjera Directa (Log) se concentra principalmente en los estados del norte, noroeste y península de Yucatán (tonos verde oscuro), mientras que los estados del centro-norte muestran los niveles más bajos (áreas blancas).
+
+```{r, message=FALSE}
+tm_shape(state_geodata) + 
+  tm_polygons(col = "sp_lag_fdi", palette="Greens", style="quantile", n=8, title="Log IED") +
+  tm_layout(main.title= 'Clusters de Inversión Extranjera Directa (Log)',  title.position = c('right', 'top'), legend.outside = TRUE, legend.outside.position = "left", title.size = 1)
+
+# tmap_arrange(business_lag, wage_lag, fdi_lag, ncol = 2)
+```
+
+**Existe correlación visible entre las tres variables**, estados con mayor actividad empresarial tienden a recibir más inversión extranjera, aunque la distribución de salarios reales muestra patrones más específicos relacionados posiblemente con sectores económicos predominantes en cada región.
+
+### Visualización Espacial de Clusters (Conglomerados)
+
+Segregación en las diferentes posibilidades de agrupaciones:
++ No significante
++ HotSpots: Alto - Alto
++ ColdSpots: Bajo - Bajo
++ Atípicos: Alto - Bajo
++ Atípicos: Bajo - Alto
+
+```{r}
+sswm_a <- queen_weights(mx_state_map) # matriz de pesos espaciales estilo reina
+
+lisa_business <- local_moran(sswm_a, state_geodata["business_activity"]) 
+state_geodata$cluster_business <- as.factor(lisa_business$GetClusterIndicators())
+levels(state_geodata$cluster_business)<-lisa_business$GetLabels() 
+```
+
+Un cluster Alto-Alto (High-High) en Sonora
+Un cluster Bajo-Alto (Low-High) en Baja California Sur
+Un cluster Bajo-Bajo (Low-Low) en la península de Yucatán
+El resto del país muestra patrones no significativos estadísticamente
+
+```{r}
+ggplot(data=state_geodata) +
+  geom_sf(aes(fill=cluster_business)) + 
+  ggtitle(label = "Clusters de Actividad Empresarial", subtitle = "Estados de México")
+```
+
+```{r}
+lisa_wage <- local_moran(sswm_a, state_geodata["real_wage"]) 
+state_geodata$cluster_wage <- as.factor(lisa_wage$GetClusterIndicators())
+levels(state_geodata$cluster_wage)<-lisa_wage$GetLabels() 
+```
+
+Todo el país aparece como "Not significant", indicando ausencia de agrupaciones espaciales estadísticamente significativas para salarios reales
+
+```{r}
+ggplot(data=state_geodata) +
+  geom_sf(aes(fill=cluster_wage)) + 
+  ggtitle(label = "Clusters de Salario Real", subtitle = "Estados de México")
+```
+
+```{r}
+lisa_fdi <- local_moran(sswm_a, state_geodata["log_new_fdi_real_mxn"]) 
+state_geodata$cluster_fdi <- as.factor(lisa_fdi$GetClusterIndicators())
+levels(state_geodata$cluster_fdi)<-lisa_fdi$GetLabels() 
+```
+
+Un cluster Alto-Alto en Veracruz
+Un cluster Bajo-Bajo en una pequeña región central
+El resto del país no muestra patrones espaciales significativos
+
+```{r}
+ggplot(data=state_geodata) +
+  geom_sf(aes(fill=cluster_fdi)) + 
+  ggtitle(label = "Clusters de Inversión Extranjera Directa (Log)", subtitle = "Estados de México")
+```
+
+### Scatterplots
+
+**Actividad Empresarial vs Salario Real**
+
+No se observa una relación clara entre actividad empresarial y salario real. La línea de tendencia es casi plana, indicando poca o nula correlación entre estas variables.
+
+```{r}
+# Create a regression model
+M1 <- lm(business_activity ~ real_wage, state_geodata)
+
+# Plot the data
+plot(business_activity ~ real_wage, state_geodata, pch=21, asp=1, las=1, col = "grey40", bg="grey80", main="Actividad Empresarial vs Salario Real")
+abline(M1, col="blue") 
+abline(v = mean(state_geodata$real_wage), lty=3, col = "grey80")
+abline(h = mean(state_geodata$business_activity), lty=3, col = "grey80")
+```
+
+**Actividad Empresarial vs IED**
+
+Se observa una tendencia positiva débil (línea azul ascendente), indicando que estados con mayor inversión extranjera tienden a mostrar mayor actividad empresarial. La mayoría de las observaciones se concentran en la parte superior derecha del gráfico (valores log_new_fdi_real_mxn entre 2 y 4).
+
+La dispersión de los puntos sugiere que la relación, aunque positiva, no es fuertemente predictiva, existiendo otros factores que influyen en la actividad empresarial además de la inversión extranjera directa.ReintentarClaude puede cometer errores. Verifique las respuestas.
+
+```{r}
+# Create a regression model
+M2 <- lm(business_activity ~ log_new_fdi_real_mxn, state_geodata)
+
+# Plot the data
+plot(business_activity ~ log_new_fdi_real_mxn, state_geodata, pch=21, asp=1, las=1, col = "grey40", bg="grey80", main="Actividad Empresarial vs Inv. Ext. Dir. (Log)")
+abline(M2, col="blue")
+abline(v = mean(state_geodata$log_new_fdi_real_mxn), lty=3, col = "grey80")
+abline(h = mean(state_geodata$business_activity), lty=3, col = "grey80")
+```
+
+**Salario Real vs IED**
+
+Hay una relación positiva entre la inversión extranjera directa (log) y el salario real. A mayor inversión, mayor salario real. Sin embargo, hay valores atípicos (outliers) que podrían estar afectando la visualización, especialmente hacia la izquierda.
+
+```{r}
+# Create a regression model
+M3 <- lm(real_wage ~ log_new_fdi_real_mxn, state_geodata)
+
+# Plot the data
+plot(real_wage ~ log_new_fdi_real_mxn, state_geodata, pch=21, asp=1, las=1, col = "grey40", bg="grey80", main="Salario Real vs Inv. Ext. Dir. (Log)")
+abline(M3, col="blue")
+abline(v = mean(state_geodata$log_new_fdi_real_mxn), lty=3, col = "grey80")
+abline(h = mean(state_geodata$real_wage), lty=3, col = "grey80")
+```
+
+## Modelos de Regresión
+
+Cargamos algunas libererías adicionales que se utilizan para el análisis de relaciones espaciales:
+```{r}
+library(spatialreg)
+library(stargazer)
+```
+
+En esta sección exploraremos diferentes modelos espaciales para entender mejor cómo la Actividad Empresarial y el Salario Real se relacionan entre sí considerando su distribución geográfica.
+
+### Modelos de Regresión Espacial
+
+Los modelos espaciales nos permiten incorporar la dependencia espacial en nuestro análisis. Utilizaremos varios tipos de modelos:
+
+1. SAR (Spatial AutoRegressive Model): Incorpora la dependencia espacial en la variable respuesta
+2. SEM (Spatial Error Model): Incorpora la dependencia espacial en los términos de error
+3. SDM (Spatial Durbin Model): Considera tanto la dependencia espacial en la variable respuesta como en las variables explicativas
+
+Estos modelos nos ayudarán a entender mejor cómo las variables se relacionan espacialmente y si existen efectos de vecindad significativos.
+
+Primero recordemos los modelos de regresión tradicional (no espaciales)
+
+```{r}
+model_a <- lm(log_new_fdi_real_mxn ~ business_activity + real_wage, data = state_geodata)
+summary(model_a)
+AIC(model_a)
+```
+
+Aquí se busca explicar la variable de Inversión Extranjera Directa (Log) considerando las variables de Actividad Empresarial y Salario Real.
+
+El modelo_a, aunque significativo, realmente no es tan bueno, pues la $R^2$ ajustada apenas sobrepasa el 0.5 ($\bar{R^2}$ = 0.5821). De hecho, la variable de Salario Real parece no ser relevante para el modelo
+
+```{r}
+model_a2 <- lm(log_new_fdi_real_mxn ~ business_activity + real_wage, data=state_geodata)
+summary(model_a2)
+AIC(model_a2)
+```
+
+
+Ahora buscaremos dar una mayor complejidad a los modelos previos al considerar terminos de autocorrelación espacial, es decir
+
+#### SAR - Spatial AutoRegressive Model
+
+También conocido como Spatial Lag Model
+```{r}
+model_b <- lagsarlm(log_new_fdi_real_mxn ~ business_activity + real_wage, data = state_geodata, listw = sswm) 
+summary(model_b)
+AIC(model_b)
+# ?lagsarlm
+```
+
+Ahora omitiendo de nuevo la variable de Salario Real
+```{r}
+model_b2 <- lagsarlm(log_new_fdi_real_mxn ~ business_activity + real_wage, data = state_geodata, listw = sswm) 
+summary(model_b2)
+AIC(model_b2)
+```
+
+Esencial, incluir la matriz de conectividad espacial dada en el parámetro 'listw' por el objeto previamente calculado con el nombre de 'sswm'
+
+#### SEM - Spatial Error Model
+
+Modelo de Error Espacial
+```{r}
+model_c <- errorsarlm(log_new_fdi_real_mxn ~ business_activity + real_wage, data = state_geodata, listw = sswm) 
+summary(model_c)
+AIC(model_c)
+# ?errorsarlm
+```
+
+Omitiendo la variable de Salario Real
+```{r}
+model_c2 <- errorsarlm(log_new_fdi_real_mxn ~ business_activity + real_wage, data = state_geodata, listw = sswm) 
+summary(model_c2)
+AIC(model_c2)
+```
+
+Igual que en el modelo SAR es esencial, incluir la matriz de conectividad espacial dada en el parámetro 'listw' por el objeto previamente calculado con el nombre de 'sswm'
+
+
+#### SDM -  Spatial Durbin Model
+
+```{r}
+model_d <- lagsarlm(log_new_fdi_real_mxn ~ business_activity + real_wage, data = state_geodata, listw = sswm, type="mixed") 
+summary(model_d)
+AIC(model_d)
+```
+
+Omitiendo la variable de Salario Real
+```{r}
+model_d2 <- lagsarlm(log_new_fdi_real_mxn ~ business_activity + real_wage, data = state_geodata, listw = sswm, type="mixed") 
+summary(model_d2)
+AIC(model_d2)
+```
+
+
+Igual que en los modelo SAR y SEM es esencial, incluir la matriz de conectividad espacial dada en el parámetro 'listw' por el objeto previamente calculado con el nombre de 'sswm' y aquí en particular se debe añadir el parámetro 'type' con valor 'mixed' para que en esencia mezcle los dos modelos previos (SAR y SEM).
+
+Finalmente para generar una breve comparativa se utiliza la librería 'stargazer'
+```{r}
+stargazer(model_a, model_b, model_c, model_d, type = "text", title="Estimated Regression Results")
+```
+
+Omitiendo la variable de Salario Real
+
+```{r}
+stargazer(model_a2, model_b2, model_c2, model_d2, type = "text", title="Estimated Regression Results")
+```
+
+### Referencias para el Análisis Exploratorio de Datos Espaciales
+
+What is exploratory data analysis? 
+https://www.ibm.com/topics/exploratory-data-analysis
+
+Exploratory Spatial Data Analysis
+https://cran.r-project.org/web/packages/geostan/vignettes/measuring-sa.html
+
+## Análisis Espacial de Datos Panel 
+
+Cargar algunas otras librerías adicionales
+```{r}
+library(plm)
+library(splm)
+library(pspatreg)
+```
+
+
+Leer base de datos Panel (mismas tablas de datos a través del tiempo)
+```{r}
+panel_data <- read.csv("panel_dataset.csv") 
+pd_frame <- pdata.frame(panel_data, index = c("state", "year"), drop.index = TRUE)
+head(pd_frame)
+# ?pdata.frame
+```
+
+
+Agregar lag espacial (importante incluir matriz de conectividad espacial, previamente calculada 'sswm') de algunas de las variables independientes (real_wage)
+```{r}
+sp_lag_wage <- slag(pd_frame$real_wage, sswm)
+```
+
+
+Definir el modelo a ser ajustado
+```{r}
+panel_model <- log_new_fdi_real_mxn ~ business_activity + real_wage + sp_lag_wage
+```
+
+Ajustar modelo
+```{r}
+non_spatial_panel_model_a <- plm(panel_model, data = pd_frame, model = "within", effect = "twoways")
+summary(non_spatial_panel_model_a)
+```
+
+Dado los malos resultados, se inteta ajustar otro modelo con efectos aleatorios
+```{r}
+non_spatial_panel_model_b <- plm(panel_model, data = pd_frame, model = "random", effect = "twoways")
+summary(non_spatial_panel_model_b)
+```
+
+
+### Hausman Test
+```{r}
+phtest(non_spatial_panel_model_a, non_spatial_panel_model_b) # p-value is larger than 5% so we do consider RE.
+```
+
+
+Ahora procedemos a estimar un modelo de regresión de panel espacial mediante máxima Verosimilitud
+```{r}
+spatial_panel_fe <- spml(panel_model, panel_data, index = c("state","year"), sswm, model= "within", effect= "time", spatial.error = "none", lag=TRUE)  # spatial autogressive
+summary(spatial_panel_fe)
+# ?spml
+```
+
+Seguidamente
+```{r}
+sar_panel_model <- pspatfit(formula = panel_model, data = panel_data, listw = sswm, demean = FALSE, eff_demean = "time", type = "sar", index = c("state", "year")) # spatial autoregressive 
+summary(sar_panel_model)
+# ?pspatfit
+```
+
+```{r}
+spatial_panel_re <- spml(panel_model, data = panel_data, index = c("state","year"), sswm, model="random", spatial.error="none", lag=TRUE) # spatial autoregressive 
+summary(spatial_panel_re)
+```
+
+```{r}
+spatial_panel_fe <- spml(panel_model, panel_data, index = c("state","year"), sswm, model= "within", effect= "time", spatial.error = "b", lag=TRUE) # spatial autoregressive and error model
+summary(spatial_panel_fe)
+```
+
+### Spatial Hausman Test
+
+```{r}
+sphtest(spatial_panel_re, spatial_panel_fe)
+```
+
+### Regresión Espacial Ponderada (GWR - Geographically Weighted Regresion)
+
+GWR es el término introducido por Fotheringham, Charlton y Brunsdon (1997, 2002) para describir una familia de modelos de regresión en los que se permite que los coeficientes varíen espacialmente. GWR utiliza las coordenadas de cada punto de muestra o centroide de zona como punto objetivo para una forma de regresión de mínimos cuadrados ponderada espacialmente.
+
+Esta última sección está basada en https://cran.r-project.org/web/packages/spgwr/vignettes/GWR.html
+
+La regresión ponderada geográficamente (GWR) es una técnica exploratoria destinada principalmente a indicar dónde se está produciendo la no estacionariedad en el mapa, es decir, donde los coeficientes de regresión ponderados localmente se alejan de sus valores globales. Su base es la preocupación de que los valores de los coeficientes ajustados de un modelo global, ajustado a todos los datos, puedan no representar variaciones locales detalladas en los datos de manera adecuada. 
+
+Sin embargo, difiere en que no busca la variación local en el espacio de datos, sino que mueve una ventana ponderada (kernel) sobre los datos, estimando un conjunto de valores de coeficientes en cada punto de ajuste elegido. Los puntos de ajuste suelen ser los puntos en los que se realizaron las observaciones, pero no tienen por qué serlo. Si los coeficientes locales varían en el espacio, se puede tomar como una indicación de no estacionariedad.
+
+La técnica implica primero seleccionar un ancho de banda para un núcleo (kernel) de pesos espaciales isotrópicos, típicamente un kernel gaussiano con un ancho de banda fijo elegido mediante validación cruzada tradicional.
+
+La elección del ancho de banda puede ser muy demandante, computacionalmente hablando, ya que se deben ajustar $n$ regresiones en cada paso. Hay técnicas alternativas disponibles, por ejemplo para anchos de banda adaptables, pero a menudo pueden requerir incluso más uso de computación.
+
+Para esto se utilizará la base de datos 'NY8_utm18' que e sparte de la librería 'spData'. Importante que la base de datos se lea como un objeto 'Spatial' (SPDF - SpatialPolygonDataFrame)
+
+```{r}
+NY8 <- as(st_read(system.file("shapes/NY8_utm18.gpkg", package="spData")), "Spatial")
+class(NY8)
+glimpse(NY8)
+# ?nydata
+# example(NY_data)
+```
+
+Seguidamente se ajusta un kernel adaptativo a esta base de datos
+
+```{r}
+bwG_NY <- gwr.sel(Z~PEXPOSURE+PCTAGE65P+PCTOWNHOME, data=NY8, gweight=gwr.Gauss, verbose=FALSE)
+```
+
+Una vez que se ha encontrado el ancho de banda a considerar, se puede utilizar la función 'gwr' para ajustar el modelo con el kernel local y el ancho de banda elegidos. Si al argumento de datos se le pasa un objeto SpatialPolygonsDataFrame o SpatialPointsDataFrame, el objeto de salida contendrá un componente, que es un objeto de la misma geometría poblado con las estimaciones de coeficientes locales. Si los objetos de entrada tienen soporte poligonal, los centroides de las entidades espaciales se toman como base para el análisis. La función también toma un argumento de puntos de ajuste, que permite crear coeficientes locales mediante regresión ponderada geográficamente para otros soportes además de los puntos de datos.
+
+```{r}
+gwrG_NY <- gwr(Z~PEXPOSURE+PCTAGE65P+PCTOWNHOME, data=NY8, bandwidth=bwG_NY, gweight=gwr.Gauss, hatmatrix=TRUE)
+gwrG_NY
+```
+
+Los resultados básicos de GWR no son interesantes para este conjunto de datos, con muy poca variación local en los valores de los coeficientes; el ancho de banda es de casi 180 km. Ni gwr ni gwr.sel todavía adoptan un argumento de ponderaciones, ya que no está claro cómo se deben combinar las ponderaciones no espaciales y geográficas. Otro problema que ha surgido es que parece que la colinealidad local puede inducirse, o al menos observarse, en aplicaciones GWR. 
+
+Como lo describen Fotheringham, Brunsdon y Charlton, GWR también se puede aplicar en un marco GLM (Generalized Linear Models), y se ha agregado una implementación provisional que permite esto al paquete 'spgwr', proporcionando selección de ancho de banda de validación cruzada y ajuste ponderado geográficamente de los modelos GLM.
+
+```{r}
+# gbwG_NY <- ggwr.sel(Cases~PEXPOSURE+PCTAGE65P+PCTOWNHOME+offset(log(POP8)), data=NY8, family="poisson", gweight=gwr.Gauss, verbose=FALSE)
+# ggwrG_NY <- ggwr(Cases~PEXPOSURE+PCTAGE65P+PCTOWNHOME+offset(log(POP8)), data=NY8, family="poisson", bandwidth=gbwG_NY, gweight=gwr.Gauss)
+# ggwrG_NY
+```
+
+Ejemplo para analizar la variabilidad del coeficiente asociado a 'PEXPOSURE' a través del espacio.
+
+```{r}
+spplot(gwrG_NY$SDF, "PEXPOSURE", col.regions=grey.colors(7, 0.95, 0.55, 2.2), cuts=6)
+```
+
+Aunque en este caso particular la variación de los coeficientes a través del tiempo es muy pequeña que realmente se podría decir que no es significativa.
+
+#### Otro breve ejemplo de GWR
+
+Adaptando el ejemplo de los Estados de México con GWR.
+
+Primero es necesario transformar tu base de datos a un 'SpatialPolygonsDataFrame' (SPDF)
+
+```{r}
+class(state_geodata)
+state_geodataSPDF <- as(state_geodata, "Spatial")
+class(state_geodataSPDF)
+```
+
+Ahora, con el objeto SPDF se puede generar un kernel adaptativo
+
+```{r}
+bw1 <- bw.gwr(log_new_fdi_real_mxn ~ business_activity + real_wage, approach = "AIC", adaptive = T, data = state_geodataSPDF) 
+```
+
+Ya que se tiene el kernel a utilizar, entonces este se pasa como parámetro del comando 'gwr' que sirve para ajustar el modelo de Regresión Espacial Ponderada (GWR)
+
+```{r warning=FALSE}
+gwrG <- gwr(log_new_fdi_real_mxn ~ business_activity + real_wage, bandwidth = bw1, gweight = gwr.Gauss, data = state_geodataSPDF, hatmatrix = T)
+gwrG
+```
+
+Por último se puede graficar claramente como van variando los diferentes coeficientes a través del espacio utilizando la función 'spplot'
+
+Intercepto (X.Intercept. aka Beta_0)
+
+```{r}
+spplot(gwrG$SDF, "X.Intercept.", col.regions=grey.colors(7, 0.95, 0.55, 2.2), cuts=6)
+```
+
+Actividad Empresarial (business_activity)
+
+```{r}
+spplot(gwrG$SDF, "business_activity", col.regions=brewer.pal(7,'Blues'), cuts=6)
+```
+
+Ingreso Mensual Real (real_wage)
+
+```{r}
+spplot(gwrG$SDF, "real_wage", col.regions=brewer.pal(7, 'Oranges'), cuts=6)
+```
+
+Graficar pares de scaterplots para detectar patrones en las variaciones de los coeficientes a nivel local.
+
+```{r}
+pairs(as(gwrG$SDF, "data.frame")[, c("X.Intercept.", "business_activity", "real_wage")], 
+      main="Correlación entre coeficientes locales de GWR")
+```
+
+```{r, include=FALSE}
+# rmarkdown::render(
+#   "./src/m1/clase_2025_04_04/actividad_2.Rmd",
+#   output_format = "html_document",
+#   output_dir = "./docs/"
+# )
+```
+
+```{r, include=FALSE}
+# rmarkdown::render(
+#   "./src/m1/clase_2025_04_04/actividad_2.Rmd",
+#   output_format = rmarkdown::pdf_document(),
+#   output_dir = "./docs/"
+# )
+```
