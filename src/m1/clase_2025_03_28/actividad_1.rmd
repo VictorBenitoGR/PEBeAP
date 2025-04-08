@@ -1,7 +1,7 @@
 ---
-title: "**Actividad 1 Aplicación de modelos de ecuaciones estructurales**"
-author: "**Víctor Benito García Rocha (A01232580)**"
-date: "**2025-02-21**"
+title: "**Series de tiempo**"
+author: "**Equipo 3**"
+date: "**2025-04-01**"
 output:
   html_document:
     df_print: paged
@@ -17,34 +17,43 @@ output:
 always_allow_html: true
 ---
 
-- **Instrucciones:**
-
-Aplica la metodología Box-Jenkins a la serie de precios ajustados de una de las TSLA del día 01/Enero/2013 al 28/Febrero/2025
-
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_chunk$set(echo = TRUE)
 ```
 
-- **Librerías**
+## Actividad - Series de Tiempo
 
-```{r message=FALSE}
-library(quantmod)
-library(tseries)
+```{r, include=FALSE}
+library(tidyverse)
 library(forecast)
-library(ggplot2)
-library(dplyr)
-library(lubridate)
+library(quantmod)
+library(AER)
+library(MASS)
+library(tseries)
+library(stats)
+library(car)
+library(lmtest)
+library(urca)
+library(aTSA)
+library(openxlsx)
+library(quantmod)
+library(DT)
 ```
 
-## Obtención de datos
+#### Obtención de datos:
+
+La empresa seleccionada fue **Tesla (TSLA)**
 
 ```{r}
 inicio <- "2013-01-01"
 fin <- "2025-02-28"
 
 getSymbols("TSLA", from = inicio, to = fin)
+```
 
-# Precios de cierre ajustados
+Precios de cierre ajustados:
+
+```{r}
 tsla_ajustados <- TSLA$TSLA.Adjusted
 tsla_df <- data.frame(
   fecha = index(tsla_ajustados),
@@ -52,12 +61,22 @@ tsla_df <- data.frame(
 )
 ```
 
-## Análisis exploratorio
+```{r}
+datatable(tsla_df, 
+          options = list(pageLength = 10, 
+                         autoWidth = TRUE, 
+                         dom = 'Bfrtip',
+          caption = "Tabla de precios ajustados de TSLA"))
+```
 
-```{r echo=FALSE}
-# Visualización de la serie temporal
+### Paso 1: Visualizar 
+_Grafica la Serie de Tiempo, así como su descomposición en tendencia, estacionalidad y errores._
+
+#### Visualización general
+
+```{r}
 ggplot(tsla_df, aes(x = fecha, y = precio)) +
-  geom_line(color = "#76b900") +
+  geom_line(color = "#E31937") +
   labs(
     title = "Serie de precios ajustados de TSLA (2013-2025)",
     x = "Fecha",
@@ -66,321 +85,474 @@ ggplot(tsla_df, aes(x = fecha, y = precio)) +
   theme_minimal()
 ```
 
-```{r include=FALSE}
-# ggsave("./src/m1/clase_2025_03_28/tsla_serie_temporal.png", width = 10, height = 6)
+#### Transformar a serie de tiempo
+
+Usamos frequency=252 asumiendo ~252 días de trading por año.
+
+```{r}
+tsla_ts <- ts(tsla_df$precio, frequency = 252, start = c(2013, 1))
 ```
 
-## Metodología Box-Jenkins
+#### Descomposición de la serie
 
-### Identificación del modelo
+En 2020 todo cambió, el precio explotó y empezó a moverse de forma muy diferente Curiosamente, los ciclos estacionales siguen el mismo patrón aunque el precio se multiplicó por 400.
+Después de 2020, cuando el precio se dispara hacia arriba lo hace con más fuerza que cuando cae.
+La tendencia muestra dos grandes oleadas de crecimiento (2020 y 2024) con un período de estabilidad entre medias.
+Las fluctuaciones diarias no aumentaron proporcionalmente con el precio, lo que sugiere que Tesla dejó de comportarse como las acciones normales.
 
-#### Verificación de estacionariedad
+```{r}
+# s.window="periodic" fuerza la estacionalidad a ser periódica (anual en este caso)
+tsla_stl <- stl(tsla_ts, s.window = "periodic", robust = TRUE)
 
-```{r echo=FALSE}
-# Test de Dickey-Fuller Aumentado
-adf_test <- adf.test(tsla_ajustados)
-print(adf_test)
-
-# Si la serie no es estacionaria, aplicamos diferenciación
-if (adf_test$p.value > 0.05) {
-  # Aplicamos diferenciación
-  tsla_diff <- diff(tsla_ajustados, differences = 1)
-  tsla_diff <- tsla_diff[!is.na(tsla_diff)]
-  
-  # Verificamos estacionariedad en la serie diferenciada
-  adf_test_diff <- adf.test(tsla_diff)
-  print(adf_test_diff)
-  
-  # Convertimos a dataframe para visualizar
-  tsla_diff_df <- data.frame(
-    fecha = index(tsla_diff),
-    diferencia = as.numeric(tsla_diff)
-  )
-  
-  # Visualizamos la serie diferenciada
-  ggplot(tsla_diff_df, aes(x = fecha, y = diferencia)) +
-    geom_line(color = "#76b900") +
-    labs(
-      title = "Serie diferenciada de precios ajustados de TSLA",
-      x = "Fecha",
-      y = "Primera diferencia"
-    ) +
-    theme_minimal()
-  
-  # Guardamos el gráfico
-  # ggsave("./src/m1/clase_2025_03_28/tsla_serie_diferenciada.png", width = 10, height = 6)
-  
-  # Usamos la serie diferenciada para el análisis
-  serie_para_analisis <- tsla_diff
-} else {
-  # Si ya es estacionaria, usamos la serie original
-  serie_para_analisis <- tsla_ajustados
-}
+# Graficar la descomposición
+plot(tsla_stl, main = "Descomposición STL de los precios ajustados de TSLA")
 ```
 
-#### Identificación de órdenes AR y MA (p, d, q)
+### Paso 2: Estacionariza la serie
+_Encuentra el valor $d$ y verifica que la $d$-ésima diferencia sea un proceso estacionario, también revisa si esta tiene o no una tendencia determinística._
 
-```{r echo=FALSE}
-# ACF y PACF para identificar órdenes p y q
-acf_resultado <- acf(serie_para_analisis, plot = FALSE)
-pacf_resultado <- pacf(serie_para_analisis, plot = FALSE)
+#### Prueba de Dickey-Fuller aumentada para verificar estacionariedad en la serie original
 
-# Creamos dataframes para los gráficos
-acf_df <- data.frame(
-  lag = acf_resultado$lag,
-  acf = acf_resultado$acf
-)
-
-pacf_df <- data.frame(
-  lag = pacf_resultado$lag,
-  pacf = pacf_resultado$acf
-)
+```{r}
+adf_test_original <- adf.test(tsla_ts)
 ```
 
-#### Interpretación de parámetros ARIMA(p,d,q)
+```{r}
+print(adf_test_original)
+```
 
-- **d (orden de la diferencia)**: Ya determinado por la prueba de estacionariedad. Como el p-valor del test ADF fue 0.2163 > 0.05, la serie **no es estacionaria** y se aplicó una diferenciación **(d=1)**.
+Los resultados de la prueba ADF muestran que la serie original **no es estacionaria** (todos los p-valores > 0.05), por lo tanto debemos diferenciarla.
 
-- **p (orden de la parte autorregresiva o AR)**: Analizando detalladamente el gráfico PACF, observamos picos significativos principalmente en los retardos 7 y hasta 24. Probaremos con valores p = 0, 1, 2 (simples) y p = 7, 8, 24 (complejos). 
+#### Primera diferencia
 
-Para seleccionar objetivamente el valor óptimo de p, utilizaremos los siguientes criterios:
+```{r}
+tsla_diff1 <- diff(tsla_ts)
+adf_test_diff1 <- adf.test(tsla_diff1)
+```
 
-1. **Test estadísticos**:
-```{r, echo=TRUE}
-# Determinamos el valor de d
-d_valor <- 1  # Ya determinado por la prueba ADF
+La prueba ADF para la primera diferencia muestra p-valores de 0.01 en todos los casos, lo que nos permite rechazar contundentemente la hipótesis nula de no estacionariedad. Por lo tanto, **la primera diferencia es estacionaria (d=1)**.
 
-# Para cada valor candidato de p
-resultados_p <- data.frame(
-  p_valor = 0,
-  AIC = 0,
-  BIC = 0,
-  LogLik = 0
-)
+```{r}
+print(adf_test_diff1)
+```
 
-for (p_val in c(0, 1, 2, 7, 8, 24)) {
-  modelo_temp <- Arima(tsla_ajustados, order = c(p_val, d_valor, 0))
-  resultados_p <- rbind(resultados_p, data.frame(
-    p_valor = p_val,
-    AIC = modelo_temp$aic,
-    BIC = BIC(modelo_temp),
-    LogLik = modelo_temp$loglik
+```{r}
+plot(tsla_diff1, main = "Primera diferencia de precios ajustados de TSLA",
+     ylab = "Diferencia", xlab = "Tiempo")
+```
+
+Si tsla_diff1 todavía tuviera una tendencia determinística, significaría que su media no es constante, sino que cambia linealmente con el tiempo, ignorar esto llevaría a un mal modelo.
+
+#### Verificamos si existe tendencia determinística en la serie diferenciada
+
+```{r}
+time_trend <- 1:length(tsla_diff1)
+trend_model <- lm(tsla_diff1 ~ time_trend)
+summary(trend_model)
+```
+
+Observamos que el coeficiente asociado a la variable de tiempo (time_trend) no es estadísticamente significativo por su p-value (0.666), sugiriendo que **no hay evidencia de una tendencia lineal determinística** en la serie de las primeras diferencias de los precios.
+
+1. Detectamos no estacionariedad en la serie original (tsla_ts) con ADF.
+2. Aplicamos la primera diferencia (d=1) y el ADF confirmó que la serie resultante (tsla_diff1) sí es estacionaria (p=0.01).
+3. Verificamos ausencia de tendencia determinística en la serie estacionaria (tsla_diff1) con el modelo de regresión (p=0.666).
+4. **La d es igual a 1.**
+
+
+### Paso 3: Identifica los valor $p$ y $q$
+_Estima la función de autocorrelación y la función de autocorrelación parcial. A partir de sus correlogramas estima los valores de $p$ y $q$._
+
+#### Función de autocorrelación (ACF)
+
+```{r}
+acf_tsla <- acf(tsla_diff1, lag.max = 36, plot = FALSE)
+acf_tsla
+```
+
+```{r}
+plot(acf_tsla, main = "Función de Autocorrelación (ACF)")
+```
+
+#### Función de autocorrelación parcial (PACF)
+
+```{r}
+pacf_tsla <- pacf(tsla_diff1, lag.max = 36, plot = FALSE)
+pacf_tsla
+```
+
+```{r}
+plot(pacf_tsla, main = "Función de Autocorrelación Parcial (PACF)")
+```
+
+Basándonos en las gráficas de ACF y PACF, vamos a probar varios modelos ARIMA para encontrar el mejor ajuste con los criterios de AIC, BIC y LogLikelihood:
+
+```{r}
+mostrar_metricas <- function(modelo, nombre) {
+  cat("Modelo:", nombre, "\n")
+  cat("AIC:", AIC(modelo), "\n")
+  cat("BIC:", BIC(modelo), "\n")
+  cat("Log-Likelihood:", logLik(modelo), "\n\n")
+  return(data.frame(
+    Modelo = nombre,
+    AIC = AIC(modelo),
+    BIC = BIC(modelo),
+    LogLik = as.numeric(logLik(modelo))
   ))
 }
 ```
 
-```{r echo=FALSE}
-print(resultados_p)
+```{r}
+modelos <- list()
+resultados <- data.frame(Modelo = character(), AIC = numeric(), BIC = numeric(), LogLik = numeric())
 ```
 
-Mejor p según AIC:
-
-```{r echo=FALSE}
-mejor_p_aic <- resultados_p$p_valor[which.min(resultados_p$AIC)]
-mejor_p_aic
-```
-
-Mejor p según BIC:
-
-```{r echo=FALSE}
-mejor_p_bic <- resultados_p$p_valor[which.min(resultados_p$BIC)]
-mejor_p_bic
-```
-
-Ambos criterios sugieren que el valor óptimo para p es **0**.
-
-- **q (orden de la parte media móvil o MA)**: Observando el gráfico ACF, vemos picos significativos que sobrepasan las líneas de significancia en los retardos 7, 9, 20, 24 y 31. En un modelo MA(q), el ACF debería "cortarse" después del retardo q. Sin embargo, los picos dispersos sugieren probar con diferentes valores de q.
+#### Modelos simples (p,q entre 1 y 3)
 
 ```{r}
-# Ya que p=0 (según los resultados anteriores), ahora probamos diferentes valores de q
-resultados_q <- data.frame(
-  q_valor = 0,
-  AIC = 0,
-  BIC = 0,
-  LogLik = 0
-)
+# Modelo ARIMA(1,1,1) - modelo simple balanceado
+modelo_111 <- Arima(tsla_ts, order = c(1, 1, 1))
+modelos[["ARIMA(1,1,1)"]] <- modelo_111
+resultados <- rbind(resultados, mostrar_metricas(modelo_111, "ARIMA(1,1,1)"))
 
-# Probamos diferentes valores de q (0, 1, 7, 9, 20, 24)
-for (q_val in c(0, 1, 7, 9, 20, 24)) {
-  modelo_temp <- Arima(tsla_ajustados, order = c(0, d_valor, q_val))
-  resultados_q <- rbind(resultados_q, data.frame(
-    q_valor = q_val,
-    AIC = modelo_temp$aic,
-    BIC = BIC(modelo_temp),
-    LogLik = modelo_temp$loglik
-  ))
-}
+# Modelo ARIMA(2,1,2) - modelo simple con dos rezagos
+modelo_212 <- Arima(tsla_ts, order = c(2, 1, 2))
+modelos[["ARIMA(2,1,2)"]] <- modelo_212
+resultados <- rbind(resultados, mostrar_metricas(modelo_212, "ARIMA(2,1,2)"))
 
-# Eliminamos la primera fila (inicialización)
-resultados_q <- resultados_q[-1,]
+# Modelo ARIMA(3,1,3) - modelo simple con tres rezagos
+modelo_313 <- Arima(tsla_ts, order = c(3, 1, 3))
+modelos[["ARIMA(3,1,3)"]] <- modelo_313
+resultados <- rbind(resultados, mostrar_metricas(modelo_313, "ARIMA(3,1,3)"))
 
-print(resultados_q)
+# Modelos adicionales simples
+# Modelo ARIMA(1,1,0) - modelo AR simple
+modelo_110 <- Arima(tsla_ts, order = c(1, 1, 0))
+modelos[["ARIMA(1,1,0)"]] <- modelo_110
+resultados <- rbind(resultados, mostrar_metricas(modelo_110, "ARIMA(1,1,0)"))
 
-# Encontramos el valor óptimo según AIC y BIC
-mejor_q_aic <- resultados_q$q_valor[which.min(resultados_q$AIC)]
-mejor_q_bic <- resultados_q$q_valor[which.min(resultados_q$BIC)]
-
-cat("\nValor óptimo de q según AIC:", mejor_q_aic, "\n")
-cat("Valor óptimo de q según BIC:", mejor_q_bic, "\n")
+# Modelo ARIMA(0,1,1) - modelo MA simple
+modelo_011 <- Arima(tsla_ts, order = c(0, 1, 1))
+modelos[["ARIMA(0,1,1)"]] <- modelo_011
+resultados <- rbind(resultados, mostrar_metricas(modelo_011, "ARIMA(0,1,1)"))
 ```
 
-**Interpretación para q**: Basándonos en los resultados, el modelo óptimo sería un ARIMA(0,1,q), donde:
-- Según AIC, q = 24 ofrece el mejor ajuste
-- Según BIC, q = 1 es óptimo, favoreciendo el modelo más parsimonioso
-
-Dado que estamos trabajando con series financieras, donde el principio de parsimonia es importante, podríamos optar por un modelo ARIMA(0,1,1), que es más simple y evita posibles problemas de sobreajuste.
+#### Modelos basados en ACF y PACF
 
 ```{r}
-# Gráfico ACF
-g_acf <- ggplot(acf_df, aes(x = lag, y = acf)) +
-  geom_bar(stat = "identity", fill = "#76b900", width = 0.5) +
-  geom_hline(yintercept = c(1.96/sqrt(length(serie_para_analisis)), 
-                           -1.96/sqrt(length(serie_para_analisis))), 
-             linetype = "dashed", color = "blue") +
-  labs(title = "Función de Autocorrelación (ACF)",
-       x = "Retardo",
-       y = "ACF") +
-  theme_minimal()
+# Modelo ARIMA(7,1,0) - identificado por pico en rezago 7 del PACF
+modelo_710 <- Arima(tsla_ts, order = c(7, 1, 0))
+modelos[["ARIMA(7,1,0)"]] <- modelo_710
+resultados <- rbind(resultados, mostrar_metricas(modelo_710, "ARIMA(7,1,0)"))
 
-# Gráfico PACF
-g_pacf <- ggplot(pacf_df, aes(x = lag, y = pacf)) +
-  geom_bar(stat = "identity", fill = "#76b900", width = 0.5) +
-  geom_hline(yintercept = c(1.96/sqrt(length(serie_para_analisis)), 
-                           -1.96/sqrt(length(serie_para_analisis))), 
-             linetype = "dashed", color = "blue") +
-  labs(title = "Función de Autocorrelación Parcial (PACF)",
-       x = "Retardo",
-       y = "PACF") +
-  theme_minimal()
+# Modelo ARIMA(0,1,7) - identificado por pico en rezago 7 del ACF
+modelo_017 <- Arima(tsla_ts, order = c(0, 1, 7))
+modelos[["ARIMA(0,1,7)"]] <- modelo_017
+resultados <- rbind(resultados, mostrar_metricas(modelo_017, "ARIMA(0,1,7)"))
+
+# Modelo ARIMA(9,1,0) - identificado por pico en rezago 9 del PACF
+modelo_910 <- Arima(tsla_ts, order = c(9, 1, 0))
+modelos[["ARIMA(9,1,0)"]] <- modelo_910
+resultados <- rbind(resultados, mostrar_metricas(modelo_910, "ARIMA(9,1,0)"))
+
+# Modelo ARIMA(0,1,9) - identificado por pico en rezago 9 del ACF
+modelo_019 <- Arima(tsla_ts, order = c(0, 1, 9))
+modelos[["ARIMA(0,1,9)"]] <- modelo_019
+resultados <- rbind(resultados, mostrar_metricas(modelo_019, "ARIMA(0,1,9)"))
+
+# Modelo ARIMA(7,1,7) - combinación de efectos AR y MA en rezago 7
+modelo_717 <- Arima(tsla_ts, order = c(7, 1, 7))
+modelos[["ARIMA(7,1,7)"]] <- modelo_717
+resultados <- rbind(resultados, mostrar_metricas(modelo_717, "ARIMA(7,1,7)"))
+
+# Modelo ARIMA(9,1,9) - combinación de efectos AR y MA en rezago 9
+modelo_919 <- Arima(tsla_ts, order = c(9, 1, 9))
+modelos[["ARIMA(9,1,9)"]] <- modelo_919
+resultados <- rbind(resultados, mostrar_metricas(modelo_919, "ARIMA(9,1,9)"))
+
+# Modelo ARIMA(24,1,0) - por pico más alto en PACF (rezago 24)
+modelo_2410 <- Arima(tsla_ts, order = c(24, 1, 0))
+modelos[["ARIMA(24,1,0)"]] <- modelo_2410
+resultados <- rbind(resultados, mostrar_metricas(modelo_2410, "ARIMA(24,1,0)"))
+
+# Modelo ARIMA(0,1,24) - por pico más alto en ACF (rezago 24)
+modelo_0124 <- Arima(tsla_ts, order = c(0, 1, 24))
+modelos[["ARIMA(0,1,24)"]] <- modelo_0124
+resultados <- rbind(resultados, mostrar_metricas(modelo_0124, "ARIMA(0,1,24)"))
 ```
 
-```{r, echo=FALSE}
-print(g_acf)
+#### Resultados
+
+```{r}
+print(resultados)
 ```
 
-```{r, echo=FALSE}
-print(g_pacf)
+```{r}
+top_5_aic <- resultados[order(resultados$AIC), ][1:5, ]
+top_5_bic <- resultados[order(resultados$BIC), ][1:5, ]
+top_5_loglik <- resultados[order(-resultados$LogLik), ][1:5, ]
 ```
 
-```{r, include=FALSE}
-# ggsave("./src/m1/clase_2025_03_28/tsla_acf.png", plot = g_acf, width = 8, height = 6)
-# ggsave("./src/m1/clase_2025_03_28/tsla_pacf.png", plot = g_pacf, width = 8, height = 6)
+Top 5 modelos según **AIC**:
+1. **ARIMA(24,1,0)**
+2. ARIMA(0,1,24)
+3. ARIMA(9,1,9)
+4. **ARIMA(7,1,7)**
+5. ARIMA(9,1,0)
+
+```{r}
+print(top_5_aic)
 ```
 
-### Estimación de modelos candidatos
+Top 5 modelos según **BIC**:
+1. ARIMA(1,1,0)
+2. ARIMA(0,1,1)
+3. **ARIMA(7,1,7)**
+4. ARIMA(9,1,0)
+5. ARIMA(0,1,9)
 
-```{r echo=FALSE}
-# Determinar si usamos la serie original o diferenciada
-if (exists("tsla_diff")) {
-  d_valor <- 1
-  serie_modelado <- tsla_diff
-} else {
-  d_valor <- 0
-  serie_modelado <- tsla_ajustados
-}
-
-# Ajustar automáticamente modelo ARIMA
-modelo_auto <- auto.arima(tsla_ajustados, seasonal = FALSE)
-summary(modelo_auto)
+```{r}
+print(top_5_bic)
 ```
 
-```{r echo=FALSE}
-# Basado en ACF y PACF, probamos modelos específicos
-# Creamos modelos más específicos basados en los patrones observados
-modelo1 <- Arima(tsla_ajustados, order = c(0, d_valor, 0))  # Modelo simple (camino aleatorio con deriva)
-modelo2 <- Arima(tsla_ajustados, order = c(1, d_valor, 1))  # Modelo clásico ARIMA(1,d,1)
-modelo3 <- Arima(tsla_ajustados, order = c(2, d_valor, 1))  # Aumentamos orden AR a 2
-modelo4 <- Arima(tsla_ajustados, order = c(0, d_valor, 1))  # Modelo MA(1) puro
-modelo5 <- Arima(tsla_ajustados, order = c(7, d_valor, 1))  # Basado en pico PACF en retardo 7
-modelo6 <- Arima(tsla_ajustados, order = c(24, d_valor, 0))  # Considerando el pico más alto en retardo 24
+Top 5 modelos según **LogLik**:
+1. **ARIMA(24,1,0)**
+2. ARIMA(0,1,24)
+3. ARIMA(9,1,9)
+4. **ARIMA(7,1,7)**
+5. ARIMA(9,1,0)
 
-# Comparar criterios AIC y BIC
-modelos_df <- data.frame(
-  Modelo = c("Auto ARIMA", "ARIMA(0,d,0)", "ARIMA(1,d,1)", "ARIMA(2,d,1)", 
-             "ARIMA(0,d,1)", "ARIMA(7,d,1)", "ARIMA(24,d,0)"),
-  Orden = c(paste(modelo_auto$arma[1], modelo_auto$arma[6], modelo_auto$arma[2]), 
-            paste(0, d_valor, 0),
-            paste(1, d_valor, 1), 
-            paste(2, d_valor, 1), 
-            paste(0, d_valor, 1),
-            paste(7, d_valor, 1),
-            paste(24, d_valor, 0)),
-  AIC = c(modelo_auto$aic, modelo1$aic, modelo2$aic, modelo3$aic, 
-          modelo4$aic, modelo5$aic, modelo6$aic),
-  BIC = c(BIC(modelo_auto), BIC(modelo1), BIC(modelo2), BIC(modelo3), 
-          BIC(modelo4), BIC(modelo5), BIC(modelo6))
-)
-
-print(modelos_df)
+```{r}
+print(top_5_loglik)
 ```
 
-```{r echo=FALSE}
-# Seleccionar el mejor modelo (menor AIC)
-mejor_modelo_idx <- which.min(modelos_df$AIC)
-mejor_modelo_nombre <- modelos_df$Modelo[mejor_modelo_idx]
+Basado en los resultados, los 2 mejores modelos para seleccionar son:
+1. **ARIMA(24,1,0)**: Tiene el mejor AIC (19427.67) y el mejor LogLik (-9688.835). Captura los patrones mensuales en los datos de Tesla.
+2. **ARIMA(7,1,7)**: Tiene un AIC muy competitivo (19438.24, solo 10 puntos peor que el mejor) y el tercer mejor BIC (19528.62) Captura patrones semanales. También podríamos considerar ARIMA(9,1,9) que está arriba en AIC y LogLik pero solo por muy poco, mientras que en BIC es peor por una diferencia muy grande de 23.77.
 
-# También identificamos el mejor modelo según BIC
-mejor_modelo_bic_idx <- which.min(modelos_df$BIC)
-mejor_modelo_bic_nombre <- modelos_df$Modelo[mejor_modelo_bic_idx]
+Es interesante observar que aunque ARIMA(1,1,0) tiene el mejor BIC, su AIC y LogLik son mucho peores, lo que sugiere que es demasiado simple y no captura adecuadamente la dinámica de los datos. Los dos modelos recomendados ofrecen el mejor balance entre los 3 criterios que consideramos relevantes.
 
-cat("El mejor modelo según AIC es:", mejor_modelo_nombre, "\n")
-cat("El mejor modelo según BIC es:", mejor_modelo_bic_nombre, "\n")
+### Paso 4: Ajusta el Modelo ARIMA
+_Ajusta un modelo $ARIMA(p,d,q)$ con los valores encontrados en los pasos previos. Revisa sus residuales, comparalos con el proceso estacionario (ruido blanco) que encontraste en el paso 2 y muestra su valor AIC._
+
+#### Ajustamos los dos mejores modelos seleccionados
+
+```{r}
+modelo_2410 <- Arima(tsla_ts, order = c(24, 1, 0))
+modelo_717 <- Arima(tsla_ts, order = c(7, 1, 7))
 ```
 
-### Diagnóstico del modelo
+#### Extraemos residuales
 
-```{r echo=FALSE}
-# Diagnóstico del modelo seleccionado
-if (mejor_modelo_nombre == "Auto ARIMA") {
-  modelo_final <- modelo_auto
-} else if (mejor_modelo_nombre == "ARIMA(0,d,0)") {
-  modelo_final <- modelo1
-} else if (mejor_modelo_nombre == "ARIMA(1,d,1)") {
-  modelo_final <- modelo2
-} else if (mejor_modelo_nombre == "ARIMA(2,d,1)") {
-  modelo_final <- modelo3
-} else if (mejor_modelo_nombre == "ARIMA(0,d,1)") {
-  modelo_final <- modelo4
-} else if (mejor_modelo_nombre == "ARIMA(7,d,1)") {
-  modelo_final <- modelo5
-} else if (mejor_modelo_nombre == "ARIMA(24,d,0)") {
-  modelo_final <- modelo6
-}
-
-# Test de Ljung-Box para autocorrelación de residuos
-ljung_box <- Box.test(modelo_final$residuals, lag = 10, type = "Ljung-Box")
-print(ljung_box)
+```{r}
+residuales_2410 <- residuals(modelo_2410)
+residuales_717 <- residuals(modelo_717)
 ```
 
-```{r echo=FALSE}
-# Analizar residuos
-checkresiduals(modelo_final)
+#### Análisis de residuales
+
+- Ambos modelos muestran patrones muy similares. Se observa un aumento notable en la volatilidad después de 2020, coincidiendo con la pandemia y el gran crecimiento de Tesla. **Esto indica heterocedasticidad (varianza no constante) en ambos modelos**, lo que sugiere que los precios de Tesla se volvieron mucho más volátiles.
+
+- Igualmente las distribuciones de residuales de ambos modelos se desvían de la normalidad, con colas pesadas (más valores extremos que en una distribución normal), **aunque es algo típico en series financieras**.
+
+```{r}
+par(mfrow = c(2, 2))
+plot(residuales_2410, main = "Residuales ARIMA(24,1,0)")
+plot(residuales_717, main = "Residuales ARIMA(7,1,7)")
+qqnorm(residuales_2410, main = "QQ-Plot ARIMA(24,1,0)")
+qqline(residuales_2410)
+qqnorm(residuales_717, main = "QQ-Plot ARIMA(7,1,7)")
+qqline(residuales_717)
+par(mfrow = c(1, 1))
 ```
 
-### Pronóstico
+#### Test de Ljung-Box para autocorrelación en residuales
 
-```{r echo=FALSE}
-# Realizar pronóstico para los próximos 730 días (2 años)
-pronostico <- forecast(modelo_final, h = 730)
+- ARIMA(24,1,0): p-value = 1
 
-# Visualizar pronóstico
-autoplot(pronostico) +
-  labs(
-    title = "Pronóstico de precios de TSLA para los próximos 2 años",
-    x = "Tiempo",
-    y = "Precio ajustado (USD)"
-  ) +
-  theme_minimal()
+- ARIMA(7,1,7): p-value = 0.588
+
+Ambos p-valores son mayores a 0.05, lo que indica que **no hay autocorrelación significativa en los residuales**. El modelo ARIMA(24,1,0) muestra un mejor comportamiento de ruido blanco.
+
+```{r}
+Box.test(residuales_2410, type = "Ljung-Box", lag = 20)
+Box.test(residuales_717, type = "Ljung-Box", lag = 20)
 ```
 
-```{r include=FALSE}
-# ggsave("./src/m1/clase_2025_03_28/tsla_pronostico.png", width = 10, height = 6)
+#### ACF de residuales
+
+Los correlogramas confirman la ausencia de autocorrelación significativa en ambos modelos. Casi todos los valores están dentro de las bandas de confianza, lo que indica que los modelos han capturado adecuadamente la estructura temporal de la serie.
+
+```{r}
+acf(residuales_2410, main = "ACF Residuales ARIMA(24,1,0)")
+acf(residuales_717, main = "ACF Residuales ARIMA(7,1,7)")
 ```
 
-```{r, echo=FALSE}
-print(pronostico)
+#### Valores AIC, BIC y LogLik
+
+- ARIMA(24,1,0)
+  - AIC: 19427.67
+  - BIC: 19578.3
+  - LogLik: -9688.835
+
+Este modelo tiene mejor AIC y LogLik, indicando un mejor ajuste a los datos, pero con más parámetros.
+
+```{r}
+cat("AIC:", AIC(modelo_2410), "\n")
+cat("BIC:", BIC(modelo_2410), "\n")
+cat("LogLik:", logLik(modelo_2410), "\n\n")
 ```
 
+- ARIMA(7,1,7)
+  - AIC: 19438.24
+  - BIC: 19528.62
+  - LogLik: -9704.122
+
+Este modelo tiene mejor BIC, indicando mejor equilibrio entre ajuste y parsimonia (menos parámetros).
+
+```{r}
+cat("AIC:", AIC(modelo_717), "\n")
+cat("BIC:", BIC(modelo_717), "\n")
+cat("LogLik:", logLik(modelo_717), "\n\n")
+```
+
+En conjunto, ambos modelos son válidos, con el ARIMA(24,1,0) mostrando un mejor ajuste puro y el ARIMA(7,1,7) ofreciendo una mejor relación entre ajuste y complejidad.
+
+### Paso 5: Proyecciones
+_Realiza predicciones para los próximos 2 años (la frecuencia de la serie es diaria) y muestra estas gráficamente. Para esto puedes utilizar el comando 'predict' o 'forecast'._
+
+#### Predicción a 2 años
+
+```{r}
+# Número de días para 2 años (aproximadamente 504 días de trading)
+dias_prediccion <- 504
+
+# Realizamos predicciones con ambos modelos
+prediccion_2410 <- predict(modelo_2410, n.ahead = dias_prediccion)
+prediccion_717 <- predict(modelo_717, n.ahead = dias_prediccion)
+
+# Creamos secuencia de fechas futuras para el eje x
+ultima_fecha <- time(tsla_ts)[length(tsla_ts)]
+fechas_futuras <- seq(ultima_fecha, by = 1/252, length.out = dias_prediccion)
+
+# Obtenemos los últimos precios predichos
+ultimo_precio_2410 <- prediccion_2410$pred[dias_prediccion]
+ultimo_precio_717 <- prediccion_717$pred[dias_prediccion]
+```
+
+#### Visualización a 2 años
+
+- Gráfica para ARIMA(24,1,0)
+
+```{r}
+plot(time(tsla_ts), tsla_ts, type = "l", col = "gray",
+     xlim = c(min(time(tsla_ts)), max(fechas_futuras)),
+     main = "Predicción ARIMA(24,1,0)",
+     xlab = "Tiempo", ylab = "Precio ajustado (USD)")
+lines(fechas_futuras, prediccion_2410$pred, col = "red")
+lines(fechas_futuras, prediccion_2410$pred + 2*prediccion_2410$se, col = "blue", lty = 2)
+lines(fechas_futuras, prediccion_2410$pred - 2*prediccion_2410$se, col = "blue", lty = 2)
+# Añadimos texto con el último precio predicho
+text(2021, min(tsla_ts) + 125, 
+     labels = paste("Precio final: $", round(ultimo_precio_2410, 2)), 
+     col = "darkred", cex = 1.7, font = 2, bg = "white")
+```
+
+- Gráfica para ARIMA(7,1,7)
+
+```{r}
+plot(time(tsla_ts), tsla_ts, type = "l", col = "gray",
+     xlim = c(min(time(tsla_ts)), max(fechas_futuras)),
+     main = "Predicción ARIMA(7,1,7)",
+     xlab = "Tiempo", ylab = "Precio ajustado (USD)")
+lines(fechas_futuras, prediccion_717$pred, col = "red")
+lines(fechas_futuras, prediccion_717$pred + 2*prediccion_717$se, col = "blue", lty = 2)
+lines(fechas_futuras, prediccion_717$pred - 2*prediccion_717$se, col = "blue", lty = 2)
+# Añadimos texto con el último precio predicho
+text(2021, min(tsla_ts) + 125, 
+     labels = paste("Precio final: $", round(ultimo_precio_717, 2)), 
+     col = "darkred", cex = 1.7, font = 2, bg = "white")
+```
+
+Aún siendo un buen modelo, este tipo de ARIMA no es adecuado para predecir a largo plazo, sería más adecuado utilizar modelos más complejos y considerando variables exógenas. Para visualizarlos mejor, mostramos aquí las predicciones para los próximos 21 días:
+
+#### Predicción a 1 mes
+
+```{r}
+# Número de días para 1 mes de trading (aproximadamente 21 días)
+dias_prediccion <- 21
+
+# Realizamos predicciones con ambos modelos
+prediccion_2410 <- predict(modelo_2410, n.ahead = dias_prediccion)
+prediccion_717 <- predict(modelo_717, n.ahead = dias_prediccion)
+
+# Preparamos los datos del último año y las fechas
+tiempo_ts <- time(tsla_ts)
+indice_ultimo_anio <- length(tsla_ts) - 252
+datos_ultimo_anio <- window(tsla_ts, start = tiempo_ts[indice_ultimo_anio])
+
+# Creamos secuencia de tiempo para predicciones
+ultima_fecha <- tiempo_ts[length(tsla_ts)]
+tiempo_prediccion <- seq(ultima_fecha, by = 1/252, length.out = dias_prediccion)
+tiempo_ultimo_anio <- tiempo_ts[indice_ultimo_anio:length(tsla_ts)]
+
+# Calculamos límites del eje Y
+y_min <- min(c(datos_ultimo_anio, prediccion_2410$pred - 2*prediccion_2410$se,
+               prediccion_717$pred - 2*prediccion_717$se))
+y_max <- max(c(datos_ultimo_anio, prediccion_2410$pred + 2*prediccion_2410$se,
+               prediccion_717$pred + 2*prediccion_717$se))
+y_margin <- (y_max - y_min) * 0.1
+
+# Obtenemos los últimos precios predichos
+ultimo_precio_2410 <- prediccion_2410$pred[dias_prediccion]
+ultimo_precio_717 <- prediccion_717$pred[dias_prediccion]
+
+# Visualizamos las predicciones
+par(mfrow = c(2, 1), mar = c(5, 4, 4, 2) + 0.1)
+```
+
+#### Visualización a 1 mes
+
+- Gráfica para ARIMA(24,1,0)
+
+```{r}
+plot(tiempo_ultimo_anio, datos_ultimo_anio, type = "l", col = "gray",
+     xlim = c(min(tiempo_ultimo_anio), max(tiempo_prediccion)),
+     ylim = c(y_min - y_margin, y_max + y_margin),
+     main = "Predicción a 21 días - ARIMA(24,1,0)",
+     xlab = "Tiempo", ylab = "Precio ajustado (USD)")
+lines(tiempo_prediccion, prediccion_2410$pred, col = "red", lwd = 2)
+lines(tiempo_prediccion, prediccion_2410$pred + 2*prediccion_2410$se, col = "blue", lty = 2)
+lines(tiempo_prediccion, prediccion_2410$pred - 2*prediccion_2410$se, col = "blue", lty = 2)
+legend("topleft", 
+       legend = c("Histórico", "Predicción", "Intervalo 95%"),
+       col = c("gray", "red", "blue"),
+       lty = c(1, 1, 2),
+       lwd = c(1, 2, 1))
+text(2024.9, ultimo_precio_2410 - 20, 
+     labels = paste("Precio final: $", round(ultimo_precio_2410, 2)), 
+     col = "darkred", cex = 1.2, font = 2, bg = "white")
+```
+
+- Gráfica para ARIMA(7,1,7)
+
+```{r}
+plot(tiempo_ultimo_anio, datos_ultimo_anio, type = "l", col = "gray",
+     xlim = c(min(tiempo_ultimo_anio), max(tiempo_prediccion)),
+     ylim = c(y_min - y_margin, y_max + y_margin),
+     main = "Predicción a 21 días - ARIMA(7,1,7)",
+     xlab = "Tiempo", ylab = "Precio ajustado (USD)")
+lines(tiempo_prediccion, prediccion_717$pred, col = "red", lwd = 2)
+lines(tiempo_prediccion, prediccion_717$pred + 2*prediccion_717$se, col = "blue", lty = 2)
+lines(tiempo_prediccion, prediccion_717$pred - 2*prediccion_717$se, col = "blue", lty = 2)
+legend("topleft", 
+       legend = c("Histórico", "Predicción", "Intervalo 95%"),
+       col = c("gray", "red", "blue"),
+       lty = c(1, 1, 2),
+       lwd = c(1, 2, 1))
+text(2024.9, ultimo_precio_717 - 20, 
+     labels = paste("Precio final: $", round(ultimo_precio_717, 2)), 
+     col = "darkred", cex = 1.2, font = 2, bg = "white")
+```
 
 ```{r, include=FALSE}
 # rmarkdown::render(
